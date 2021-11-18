@@ -62,7 +62,9 @@ static UInt16 SetInterruptMask(UInt16 newMask)
 }
 
 #define MAX_THREADS 32
-#define MAX_VALUES 32
+
+// windows supports a minimum of 64 TLS values, that seems good for us
+#define MAX_VALUES 64
 
 struct tls_value {
   int in_use;
@@ -74,6 +76,11 @@ struct macos_thread {
   ThreadID id;
   struct tls_value tls[MAX_VALUES];
   // todo semaphores for wait and cancel
+};
+
+struct entry_point_data {
+  pte_osThreadEntryPoint entry_point;
+  void *param;
 };
 
 static struct macos_thread threads[MAX_THREADS];
@@ -92,7 +99,7 @@ static struct macos_thread *alloc_thread(ThreadID id)
     }
   }
 
-  // out of slots, how to handle
+  // out of slots, how to handle?
   return NULL;
 }
 
@@ -118,6 +125,14 @@ static void free_thread(ThreadID id)
 {
   struct macos_thread *thread = find_thread(id);
   thread->in_use = 0;
+}
+
+static void *thread_entry_point(void *param)
+{
+  struct entry_point_data *epd = (struct entry_point_data *) param;
+  int return_val = epd->entry_point(epd->param);
+  free_thread(pte_osThreadGetHandle());
+  return (void *) return_val;
 }
 
 /**
@@ -221,10 +236,15 @@ pte_osResult pte_osThreadCreate(pte_osThreadEntryPoint entryPoint,
                                 pte_osThreadHandle* ppte_osThreadHandle)
 {
   OSErr err;
+  struct entry_point_data epd;
+
+  epd.entry_point = entryPoint;
+  epd.param = argv;
+
   err = NewThread(
     kCooperativeThread,
-    (ThreadEntryProcPtr) entryPoint,
-    argv, 
+    (ThreadEntryProcPtr) thread_entry_point,
+    &epd, 
     stackSize,
     kNewSuspend | kCreateIfNeeded,
     nil,
@@ -234,7 +254,12 @@ pte_osResult pte_osThreadCreate(pte_osThreadEntryPoint entryPoint,
   switch (err) {
     case noErr: {
       // create slot for TLS, etc
-      alloc_thread(*ppte_osThreadHandle);
+      struct macos_thread *pt;
+      pt = alloc_thread(*ppte_osThreadHandle);
+      if (!pt) {
+        DisposeThread(*ppte_osThreadHandle, nil, false);
+        return PTE_OS_NO_RESOURCES;
+      }
       return PTE_OS_OK;
     }
     case memFullErr: return PTE_OS_NO_RESOURCES;
@@ -603,6 +628,7 @@ pte_osResult pte_osTlsFree(unsigned int key)
   }
 
   thread->tls[key].in_use = 0;
+  thread->tls[key].value = NULL;
   return PTE_OS_OK;
 }
 //@}
