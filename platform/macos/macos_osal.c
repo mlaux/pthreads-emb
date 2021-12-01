@@ -1,7 +1,9 @@
 #include <MacTypes.h>
+#include <Math64.h>
 #include <Memory.h>
 #include <MixedMode.h>
 #include <Threads.h>
+#include <Timer.h>
 
 #include "pte_osal.h"
 
@@ -412,9 +414,15 @@ pte_osResult pte_osThreadCheckCancel(pte_osThreadHandle threadHandle)
 /**
  * Causes the current thread to sleep for the specified number of milliseconds.
  */
-void pte_osThreadSleep(unsigned int msecs)
+void pte_osThreadSleep(unsigned int millis)
 {
-
+  UInt64 start, now, end;
+  Microseconds((UnsignedWide *) &start);
+  end = start + millis * 1000;
+  do {
+    Microseconds((UnsignedWide *) &now);
+    YieldToAnyThread();
+  } while (now < end);
 }
 
 /**
